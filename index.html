@@ -1,48 +1,123 @@
-<!doctype html><html lang="de"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#125c3a"><link rel="manifest" href="manifest.webmanifest">
-<title>Pool Shot Trainer</title>
+<title>Pool Shot Trainer V2</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#071a15;color:#fff;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}
-main{max-width:950px;margin:auto;padding:18px}.card{background:#0d2a21;border:1px solid #285241;border-radius:18px;padding:14px;margin:12px 0}
-h1{margin:0 0 6px}.muted{color:#b8cbc3;font-size:14px}.row{display:flex;gap:8px;flex-wrap:wrap}
-button,label{border:1px solid #39705b;background:#155b3e;color:#fff;border-radius:12px;padding:11px 14px;font-weight:650}
+*{box-sizing:border-box}body{margin:0;background:#061b15;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{max-width:950px;margin:auto;padding:18px}.card{background:#0d2d23;border:1px solid #28604b;border-radius:18px;padding:14px;margin:12px 0}
+h1{margin:0 0 6px;font-size:25px}.muted{color:#bdd0c8;font-size:14px;line-height:1.45}.row{display:flex;gap:8px;flex-wrap:wrap}
+button,label.btn{border:1px solid #428168;background:#176a49;color:#fff;border-radius:12px;padding:11px 14px;font-weight:700;font-size:15px}
 input{display:none}canvas{display:block;width:100%;height:auto;background:#020806;border-radius:12px;touch-action:none}
-select{background:#17352c;color:white;border:1px solid #39705b;border-radius:10px;padding:9px;margin-top:9px}
-</style></head><body><main>
-<h1>🎱 Pool Shot Trainer</h1><div class="muted">Screenshot laden → Kugeln markieren → Trainingslinie anzeigen.</div>
-<div class="card"><div class="row"><label for="f">Screenshot wählen</label><input id="f" type="file" accept="image/*">
-<button id="sample">Testbild</button><button id="reset">Markierungen löschen</button></div>
-<div id="status" class="muted" style="margin-top:10px">Bitte einen Screenshot laden.</div></div>
+select{background:#173b30;color:#fff;border:1px solid #428168;border-radius:10px;padding:9px;max-width:48%}
+.badge{display:inline-block;background:#1b7652;border-radius:20px;padding:4px 9px;font-size:12px;margin-left:6px}
+</style></head>
+<body><main>
+<h1>🎱 Pool Shot Trainer <span class="badge">V2</span></h1>
+<div class="muted">Verbesserte Erkennung für 8-Ball-Pool-Screenshots.</div>
+<div class="card"><div class="row">
+<label class="btn" for="f">Screenshot wählen</label><input id="f" type="file" accept="image/*">
+<button id="rean">Neu analysieren</button><button id="clear">Markierungen löschen</button>
+</div><div id="status" class="muted" style="margin-top:10px">Bitte einen Screenshot laden.</div></div>
 <div class="card"><canvas id="c" width="1200" height="600"></canvas>
+<div class="row" style="margin-top:10px">
 <select id="mode"><option value="cue">Antippen = Spielball</option><option value="target">Antippen = Zielkugel</option></select>
 <select id="line"><option value="direct">Linie bis Zielkugel</option><option value="extend">Linie verlängern</option></select>
-<div class="muted" style="margin-top:10px">Weiß = Spielball · Gelb = Zielkugel. Tippe die Kugeln an, falls die automatische Auswahl nicht stimmt.</div></div>
-<div class="card"><b>iPhone</b><div class="muted">Nach Veröffentlichung über HTTPS: in Safari öffnen → Teilen → Zum Home-Bildschirm. Diese V1 analysiert Screenshots und ist kein Live-Overlay.</div></div>
+</div><div class="muted" style="margin-top:9px">Weiß = Spielball · Gelb = Zielkugel · Rot = erkannte Objektkugeln.</div></div>
 <script>
-const c=document.querySelector('#c'),x=c.getContext('2d'),f=document.querySelector('#f'),st=document.querySelector('#status');
-const im=new Image();let ok=false,cue=null,target=null,cands=[];
-function fit(){let r=Math.min(1400/im.naturalWidth,800/im.naturalHeight,1);c.width=im.naturalWidth*r;c.height=im.naturalHeight*r;ok=true;draw();auto()}
-function load(u){im.onload=fit;im.onerror=()=>st.textContent='Bild konnte nicht geladen werden.';im.src=u}
-f.onchange=e=>{if(e.target.files[0])load(URL.createObjectURL(e.target.files[0]))}
-document.querySelector('#sample').onclick=()=>load('sample.jpg');
-document.querySelector('#reset').onclick=()=>{cue=target=null;cands=[];draw();st.textContent='Markierungen gelöscht. Spielball und Zielkugel antippen.'}
+const c=document.querySelector('#c'),ctx=c.getContext('2d',{willReadFrequently:true}),f=document.querySelector('#f');
+const st=document.querySelector('#status'),im=new Image(); let loaded=false, balls=[],cue=null,target=null, table=null;
+
+function load(u){im.onload=()=>{let s=Math.min(1400/im.naturalWidth,800/im.naturalHeight,1);c.width=Math.round(im.naturalWidth*s);c.height=Math.round(im.naturalHeight*s);loaded=true;analyze()};im.src=u}
+f.onchange=e=>{if(e.target.files[0])load(URL.createObjectURL(e.target.files[0]))};
+document.querySelector('#rean').onclick=()=>loaded&&analyze();
+document.querySelector('#clear').onclick=()=>{balls=[];cue=target=null;draw();st.textContent='Markierungen gelöscht. Du kannst Spielball und Zielkugel manuell antippen.'};
 document.querySelector('#line').onchange=draw;
-function mark(p,col){x.beginPath();x.arc(p.x,p.y,p.r||Math.max(9,c.width/80),0,7);x.strokeStyle=col;x.lineWidth=4;x.stroke()}
-function draw(){x.clearRect(0,0,c.width,c.height);if(ok)x.drawImage(im,0,0,c.width,c.height);for(const p of cands)mark(p,'#ff5b66');if(cue)mark(cue,'white');if(target)mark(target,'#ffd54a');
-if(cue&&target){let dx=target.x-cue.x,dy=target.y-cue.y;x.save();x.strokeStyle='white';x.lineWidth=4;x.setLineDash([12,8]);x.beginPath();x.moveTo(cue.x,cue.y);
-if(document.querySelector('#line').value==='extend'){let q=Math.max(c.width,c.height)*2/(Math.hypot(dx,dy)||1);x.lineTo(cue.x+dx*q,cue.y+dy*q)}else x.lineTo(target.x,target.y);x.stroke();x.restore()}}
-function auto(){draw();let d=x.getImageData(0,0,c.width,c.height).data,w=c.width,h=c.height,pts=[];
-let rr=Math.max(9,Math.round(w/65));
-for(let y=Math.floor(h*.16);y<h*.84;y+=5)for(let xx=Math.floor(w*.12);xx<w*.88;xx+=5){let i=(y*w+xx)*4,R=d[i],G=d[i+1],B=d[i+2],sum=R+G+B;
-let nonfelt=!(G>R*1.10&&G>B*1.08&&G>50);if(!nonfelt)continue;
-let green=0,n=0;for(let a=0;a<6.28;a+=.785){let X=Math.round(xx+Math.cos(a)*rr*1.25),Y=Math.round(y+Math.sin(a)*rr*1.25);if(X<0||Y<0||X>=w||Y>=h)continue;let j=(Y*w+X)*4,r=d[j],g=d[j+1],b=d[j+2];if(g>r*1.07&&g>b*1.05&&g>45)green++;n++}
-if(green>=5&&(sum>430||Math.max(R,G,B)-Math.min(R,G,B)>45))pts.push({x:xx,y,r:rr,score:green})}
-pts.sort((a,b)=>b.score-a.score);cands=[];for(const p of pts){if(cands.length>=20)break;if(!cands.some(q=>Math.hypot(q.x-p.x,q.y-p.y)<rr*1.5))cands.push(p)}
-let best=null,bv=-1;for(const p of cands){let i=(Math.round(p.y)*w+Math.round(p.x))*4,v=d[i]+d[i+1]+d[i+2];if(v>bv){bv=v;best=p}}
-cue=best;target=cands.find(p=>p!==cue)||null;draw();st.textContent=cands.length+' mögliche Kugeln erkannt. Falls falsch: die richtige Kugel antippen.'}
-c.onpointerdown=e=>{if(!ok)return;let r=c.getBoundingClientRect(),p={x:(e.clientX-r.left)*c.width/r.width,y:(e.clientY-r.top)*c.height/r.height,r:Math.max(9,c.width/80)};
-let near=cands.reduce((a,b)=>{let d=Math.hypot(b.x-p.x,b.y-p.y);return !a||d<a.d?{b,d}:a},null),q=near&&near.d<c.width/25?near.b:p;
-if(document.querySelector('#mode').value==='cue')cue={...q};else target={...q};draw()}
-if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
+
+function rgb(data,w,x,y){let i=(Math.round(y)*w+Math.round(x))*4;return [data[i],data[i+1],data[i+2]]}
+function felt(r,g,b){
+ // Blue/cyan/green felt: blue/green channels dominate red.
+ return (g>r*1.16 && b>r*1.12 && g>55 && b>55 && Math.abs(g-b)<125);
+}
+function findTable(data,w,h){
+ // Find the largest horizontal/vertical span dominated by felt.
+ let xs=[],ys=[];
+ for(let y=Math.floor(h*.12);y<h*.90;y+=3)for(let x=Math.floor(w*.10);x<w*.90;x+=3){
+   let [r,g,b]=rgb(data,w,x,y); if(felt(r,g,b)){xs.push(x);ys.push(y)}
+ }
+ if(xs.length<500)return {x:w*.17,y:h*.20,w:w*.66,h:h*.62};
+ xs.sort((a,b)=>a-b);ys.sort((a,b)=>a-b);
+ const q=(a,p)=>a[Math.floor((a.length-1)*p)];
+ let x0=q(xs,.015),x1=q(xs,.985),y0=q(ys,.02),y1=q(ys,.98);
+ return {x:x0,y:y0,w:x1-x0,h:y1-y0};
+}
+function scoreCircle(data,w,h,x,y,r){
+ let centerNon=0, centerN=0, ringFelt=0, ringN=0, bright=0;
+ for(let a=0;a<6.283;a+=Math.PI/8){
+   let X=x+Math.cos(a)*r*.45,Y=y+Math.sin(a)*r*.45;
+   if(X>0&&Y>0&&X<w&&Y<h){let [R,G,B]=rgb(data,w,X,Y);centerNon+=!felt(R,G,B);bright+=(R+G+B)/3;centerN++}
+   X=x+Math.cos(a)*r*1.45;Y=y+Math.sin(a)*r*1.45;
+   if(X>0&&Y>0&&X<w&&Y<h){let [R,G,B]=rgb(data,w,X,Y);ringFelt+=felt(R,G,B);ringN++}
+ }
+ return {s:(centerNon/(centerN||1))*1.25+(ringFelt/(ringN||1))*1.7, bright:bright/(centerN||1)};
+}
+function analyze(){
+ ctx.drawImage(im,0,0,c.width,c.height);
+ const W=c.width,H=c.height,id=ctx.getImageData(0,0,W,H),d=id.data;
+ table=findTable(d,W,H);
+ // Ball diameter scales with table width. Typical object ball ≈ 2.6–3.2% of playable width.
+ let r=Math.max(6,table.w*.0155), candidates=[];
+ let step=Math.max(3,Math.round(r*.34));
+ for(let y=table.y+r*1.5;y<table.y+table.h-r*1.5;y+=step){
+  for(let x=table.x+r*1.5;x<table.x+table.w-r*1.5;x+=step){
+    let q=scoreCircle(d,W,H,x,y,r);
+    if(q.s>2.15)candidates.push({x,y,r,score:q.s,bright:q.bright});
+  }
+ }
+ candidates.sort((a,b)=>b.score-a.score);balls=[];
+ for(let p of candidates){
+   if(balls.length>=18)break;
+   if(!balls.some(q=>Math.hypot(q.x-p.x,q.y-p.y)<r*1.45))balls.push(p);
+ }
+ // Refine each center by searching a small local window for best circular score.
+ balls=balls.map(p=>{
+   let best=p;
+   for(let dy=-step;dy<=step;dy+=2)for(let dx=-step;dx<=step;dx+=2){
+     let q=scoreCircle(d,W,H,p.x+dx,p.y+dy,r);
+     if(q.s>best.score)best={x:p.x+dx,y:p.y+dy,r,score:q.s,bright:q.bright};
+   } return best;
+ });
+ // Cue ball: bright, low saturation center. This is separate from general object-ball scoring.
+ let cueCandidates=[];
+ for(let p of balls){
+   let R=0,G=0,B=0,n=0,rad=Math.max(2,Math.round(r*.5));
+   for(let yy=-rad;yy<=rad;yy+=2)for(let xx=-rad;xx<=rad;xx+=2){
+     if(xx*xx+yy*yy>rad*rad)continue;let X=p.x+xx,Y=p.y+yy;if(X<0||Y<0||X>=W||Y>=H)continue;
+     let z=rgb(d,W,X,Y);R+=z[0];G+=z[1];B+=z[2];n++;
+   }
+   R/=n||1;G/=n||1;B/=n||1;let avg=(R+G+B)/3,spread=Math.max(R,G,B)-Math.min(R,G,B);
+   let whiteness=avg-spread*1.8;cueCandidates.push({...p,whiteness});
+ }
+ cue=cueCandidates.sort((a,b)=>b.whiteness-a.whiteness)[0]||null;
+ // Avoid auto-picking a target; user taps the intended object ball.
+ target=null; draw();
+ st.textContent=`${balls.length} Kugelkandidaten erkannt${cue?' · Spielball automatisch gewählt':''}. Jetzt „Zielkugel“ wählen und die gewünschte Kugel antippen.`;
+}
+function mark(p,col,width=4){ctx.beginPath();ctx.arc(p.x,p.y,p.r||12,0,Math.PI*2);ctx.strokeStyle=col;ctx.lineWidth=width;ctx.stroke()}
+function draw(){
+ ctx.clearRect(0,0,c.width,c.height);if(loaded)ctx.drawImage(im,0,0,c.width,c.height);
+ if(table){ctx.save();ctx.strokeStyle='rgba(70,220,180,.35)';ctx.lineWidth=2;ctx.strokeRect(table.x,table.y,table.w,table.h);ctx.restore()}
+ for(let b of balls)mark(b,'#ff5b66',2.5); if(cue)mark(cue,'#fff',5); if(target)mark(target,'#ffd54a',5);
+ if(cue&&target){let dx=target.x-cue.x,dy=target.y-cue.y;ctx.save();ctx.strokeStyle='#fff';ctx.lineWidth=4;ctx.setLineDash([12,8]);ctx.beginPath();ctx.moveTo(cue.x,cue.y);
+   if(document.querySelector('#line').value==='extend'){let k=Math.max(c.width,c.height)*2/(Math.hypot(dx,dy)||1);ctx.lineTo(cue.x+dx*k,cue.y+dy*k)}else ctx.lineTo(target.x,target.y);
+   ctx.stroke();ctx.restore();
+ }
+}
+c.onpointerdown=e=>{
+ if(!loaded)return;let r=c.getBoundingClientRect(),p={x:(e.clientX-r.left)*c.width/r.width,y:(e.clientY-r.top)*c.height/r.height,r:Math.max(7,(table?.w||c.width)*.0155)};
+ let near=balls.reduce((a,b)=>{let d=Math.hypot(b.x-p.x,b.y-p.y);return !a||d<a.d?{b,d}:a},null);
+ let q=near&&near.d<p.r*2.2?near.b:p;
+ if(document.querySelector('#mode').value==='cue')cue={...q};else target={...q};draw();
+};
 </script></main></body></html>
